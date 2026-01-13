@@ -401,10 +401,7 @@ def _create_mesh(component, vertices, triangles):
     for vx, vy, vz in vertices:
         points.add(adsk.core.Point3D.create(vx, vy, vz))
 
-    index_array_cls = getattr(adsk.core, 'UInt32Array', None) or getattr(adsk.core, 'Int32Array', None)
-    if not index_array_cls:
-        raise RuntimeError('No se encontró UInt32Array/Int32Array en adsk.core.')
-    tri_indices = index_array_cls.create([idx for tri in triangles for idx in tri])
+    tri_indices = adsk.core.Int32Array.create([idx for tri in triangles for idx in tri])
     mesh = adsk.fusion.TriangleMesh.create(points, tri_indices)
     component.meshBodies.add(mesh)
 
