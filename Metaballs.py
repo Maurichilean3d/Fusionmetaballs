@@ -1,6 +1,5 @@
 # Fusion 360 Metaballs Add-in
 # Description: Generates metaball-like isosurfaces via marching cubes.
-# Version: 0.4.0
 
 import adsk.core
 import adsk.fusion
@@ -10,7 +9,6 @@ import os
 import traceback
 
 APP_NAME = 'Metaballs'
-ADDIN_VERSION = '0.4.0'
 CMD_ID = 'metaballs_command'
 CMD_NAME = 'Metaballs'
 CMD_DESC = 'Generate metaball-style isosurfaces with parametric controls.'
@@ -26,8 +24,6 @@ INPUT_SPACING = 'metaball_spacing'
 INPUT_LAYOUT = 'metaball_layout'
 INPUT_THRESHOLD = 'metaball_threshold'
 INPUT_GRID = 'metaball_grid'
-INPUT_KERNEL = 'metaball_kernel'
-INPUT_MARGIN = 'metaball_margin'
 INPUT_PARAMETRIC = 'metaball_parametric'
 INPUT_PREVIEW = 'metaball_preview'
 INPUT_CLEAR = 'metaball_clear_previous'
@@ -137,7 +133,7 @@ def _help_text():
         'Metaballs en Fusion 360\n\n'
         '1) Elige cantidad, radio y separación.\n'
         '2) Selecciona un arreglo (Línea o Círculo).\n'
-        '3) Ajusta umbral, resolución y kernel.\n'
+        '3) Ajusta umbral y resolución (grid).\n'
         '4) Ejecuta para generar la malla metaball.\n\n'
         'Consejo: umbral 1.0 y grid 28 suelen ir bien.'
     )
@@ -148,7 +144,7 @@ def _help_popup_text():
         'Guía detallada\n\n'
         '• El comando genera una isosuperficie metaball con marching cubes.\n'
         '• Aumenta la resolución para más detalle (más lento).\n'
-        '• El umbral y el kernel controlan la unión entre blobs.\n'
+        '• El umbral controla la unión entre blobs.\n'
         '• Usa "Limpiar preview" para reemplazar resultados anteriores.'
     )
 
@@ -169,7 +165,6 @@ def _ensure_parameters(design, params):
     add_or_update('metaball_spacing', params['spacing'], 'cm', 'Separación entre metaballs')
     add_or_update('metaball_threshold', params['threshold'], '', 'Umbral de isosuperficie')
     add_or_update('metaball_grid', params['grid'], '', 'Resolución del grid')
-    add_or_update('metaball_margin', params['margin'], 'cm', 'Margen del bounding box')
 
 
 class MetaballsCommandCreatedHandler(adsk.core.CommandCreatedEventHandler):
@@ -195,14 +190,6 @@ class MetaballsCommandCreatedHandler(adsk.core.CommandCreatedEventHandler):
 
             inputs.addValueInput(INPUT_THRESHOLD, 'Umbral (iso)', '', adsk.core.ValueInput.createByReal(1.0))
             inputs.addIntegerSpinnerCommandInput(INPUT_GRID, 'Resolución (grid)', 8, 80, 2, 28)
-            kernel_input = inputs.addDropDownCommandInput(
-                INPUT_KERNEL,
-                'Kernel',
-                adsk.core.DropDownStyles.TextListDropDownStyle,
-            )
-            kernel_input.listItems.add('Inverse Square', True, '')
-            kernel_input.listItems.add('Poly6', False, '')
-            inputs.addValueInput(INPUT_MARGIN, 'Margen', 'cm', adsk.core.ValueInput.createByString('2 cm'))
             inputs.addBoolValueInput(INPUT_PREVIEW, 'Crear preview de metaballs', True, '', True)
             inputs.addBoolValueInput(INPUT_CLEAR, 'Limpiar preview anterior', True, '', True)
             inputs.addBoolValueInput(INPUT_PARAMETRIC, 'Guardar como parámetros', True, '', True)
@@ -255,8 +242,6 @@ class MetaballsCommandExecuteHandler(adsk.core.CommandEventHandler):
             layout_input = adsk.core.DropDownCommandInput.cast(inputs.itemById(INPUT_LAYOUT))
             threshold_input = adsk.core.ValueCommandInput.cast(inputs.itemById(INPUT_THRESHOLD))
             grid_input = adsk.core.IntegerSpinnerCommandInput.cast(inputs.itemById(INPUT_GRID))
-            kernel_input = adsk.core.DropDownCommandInput.cast(inputs.itemById(INPUT_KERNEL))
-            margin_input = adsk.core.ValueCommandInput.cast(inputs.itemById(INPUT_MARGIN))
             preview_input = adsk.core.BoolValueCommandInput.cast(inputs.itemById(INPUT_PREVIEW))
             clear_input = adsk.core.BoolValueCommandInput.cast(inputs.itemById(INPUT_CLEAR))
             parametric_input = adsk.core.BoolValueCommandInput.cast(inputs.itemById(INPUT_PARAMETRIC))
@@ -268,8 +253,6 @@ class MetaballsCommandExecuteHandler(adsk.core.CommandEventHandler):
                 'layout': layout_input.selectedItem.name,
                 'threshold': threshold_input.value,
                 'grid': grid_input.value,
-                'kernel': kernel_input.selectedItem.name,
-                'margin': margin_input.value,
                 'preview': preview_input.value,
                 'clear': clear_input.value,
                 'parametric': parametric_input.value,
@@ -289,8 +272,6 @@ class MetaballsCommandExecuteHandler(adsk.core.CommandEventHandler):
                 f"- Arreglo: {params['layout']}\n"
                 f"- Umbral: {params['threshold']:.2f}\n"
                 f"- Resolución: {params['grid']}\n"
-                f"- Kernel: {params['kernel']}\n"
-                f"- Margen: {params['margin']:.2f} cm\n"
                 f"- Preview: {'Sí' if params['preview'] else 'No'}",
                 APP_NAME,
             )
@@ -333,22 +314,7 @@ def _layout_positions(count, radius, spacing, layout):
     return points
 
 
-def _bounds_from_centers(centers, radius, margin):
-    if not centers:
-        return (-radius, -radius, -radius, radius, radius, radius)
-    xs = [c[0] for c in centers]
-    ys = [c[1] for c in centers]
-    zs = [c[2] for c in centers]
-    min_x = min(xs) - radius - margin
-    max_x = max(xs) + radius + margin
-    min_y = min(ys) - radius - margin
-    max_y = max(ys) + radius + margin
-    min_z = min(zs) - radius - margin
-    max_z = max(zs) + radius + margin
-    return (min_x, min_y, min_z, max_x, max_y, max_z)
-
-
-def _field_value(x, y, z, metaballs, kernel):
+def _field_value(x, y, z, metaballs):
     value = 0.0
     for center, radius in metaballs:
         dx = x - center[0]
@@ -356,13 +322,7 @@ def _field_value(x, y, z, metaballs, kernel):
         dz = z - center[2]
         dist_sq = dx * dx + dy * dy + dz * dz
         if dist_sq > 0.000001:
-            if kernel == 'Poly6':
-                dist = math.sqrt(dist_sq)
-                if dist < radius:
-                    t = 1.0 - (dist / radius)
-                    value += t * t * t
-            else:
-                value += (radius * radius) / dist_sq
+            value += (radius * radius) / dist_sq
     return value
 
 
@@ -381,7 +341,7 @@ def _interpolate(p1, p2, v1, v2, iso):
     )
 
 
-def _marching_cubes(metaballs, bounds, grid, iso, kernel):
+def _marching_cubes(metaballs, bounds, grid, iso):
     xmin, ymin, zmin, xmax, ymax, zmax = bounds
     step_x = (xmax - xmin) / grid
     step_y = (ymax - ymin) / grid
@@ -403,7 +363,7 @@ def _marching_cubes(metaballs, bounds, grid, iso, kernel):
                     y = ymin + (j + dy) * step_y
                     z = zmin + (k + dz) * step_z
                     cube.append((x, y, z))
-                    values.append(_field_value(x, y, z, metaballs, kernel))
+                    values.append(_field_value(x, y, z, metaballs))
 
                 cube_index = 0
                 for idx, val in enumerate(values):
@@ -441,10 +401,7 @@ def _create_mesh(component, vertices, triangles):
     for vx, vy, vz in vertices:
         points.add(adsk.core.Point3D.create(vx, vy, vz))
 
-    index_array_cls = getattr(adsk.core, 'UInt32Array', None) or getattr(adsk.core, 'Int32Array', None)
-    if not index_array_cls:
-        raise RuntimeError('No se encontró UInt32Array/Int32Array en adsk.core.')
-    tri_indices = index_array_cls.create([idx for tri in triangles for idx in tri])
+    tri_indices = adsk.core.Int32Array.create([idx for tri in triangles for idx in tri])
     mesh = adsk.fusion.TriangleMesh.create(points, tri_indices)
     component.meshBodies.add(mesh)
 
@@ -461,14 +418,10 @@ def _create_metaballs(design, params):
     centers = _layout_positions(params['count'], params['radius'], params['spacing'], params['layout'])
     metaballs = [(center, params['radius']) for center in centers]
 
-    bounds = _bounds_from_centers(centers, params['radius'], params['margin'])
-    vertices, triangles = _marching_cubes(
-        metaballs,
-        bounds,
-        params['grid'],
-        params['threshold'],
-        params['kernel'],
-    )
+    size = (params['radius'] + params['spacing']) * max(2, params['count'])
+    bounds = (-size, -size, -size, size, size, size)
+
+    vertices, triangles = _marching_cubes(metaballs, bounds, params['grid'], params['threshold'])
     if not vertices:
         raise RuntimeError('No se generó malla, ajusta el umbral o resolución.')
 
